@@ -6,6 +6,7 @@
 import sys
 import os
 import datetime
+from pathlib import Path
 
 import dropbox
 
@@ -66,63 +67,77 @@ def upload_next_chunk(dbx, file_to_upload, commit_info, session_cursor):
     return file_meta_data
 
 
-def upload_file(dbx, src_base_path, dest_base_path, file_relative_path):
-    src_file_path = os.path.join(src_base_path, file_relative_path)
-    dest_file_path = os.path.join(dest_base_path, file_relative_path)
-
-    if not os.path.exists(src_file_path):
+def upload(dbx, src_path, dest_path):
+    if not src_path.exists():
         # TODO: throw exception? log? return an indicator?
-        print("file '{}' does not exist!".format(src_file_path))
+        print("'{}' does not exist!".format(str(src_path)))
+    if src_path.is_dir():
+        for item in src_path.iterdir():
+            upload(dbx, item, dest_path.joinpath(item.name))
+    elif src_path.is_file():
+        src_path_string = str(src_path)
+        dest_path_string = str(dest_path)
+        file_mtimestamp = os.path.getmtime(src_path_string)
+        # be sure and get time zone aware time in UTC time so that it saves with correct time
+        # it is being saved who-knows-where in the world.
+        file_client_modified = datetime.datetime.fromtimestamp(file_mtimestamp, datetime.timezone.utc)
+        # Destinatoin TODO: Need to figure out mode and autorename parameter
+        commit_info = dropbox.files.CommitInfo(path=dest_path_string, client_modified=file_client_modified)
+        session_cursor = dropbox.files.UploadSessionCursor()
+        with open(src_path_string, mode='rb') as file_to_upload:
+            while True:
+                file_meta_data = upload_next_chunk(dbx,
+                                                file_to_upload,
+                                                commit_info,
+                                                session_cursor)
+                if file_meta_data is not None:
+                    break
+        del(session_cursor)
+        print("Uploaded file meta data:\n")
+        print("  id={}".format(file_meta_data.id))
+        print("  client_modified={}".format(file_meta_data.client_modified))
+        print("  server_modified={}".format(file_meta_data.server_modified))
+        print("  rev={}".format(file_meta_data.rev))
+        print("  size={}".format(file_meta_data.size))
+        print("  media_info={}".format(file_meta_data.media_info))
+        print("  sharing_info={}".format(file_meta_data.sharing_info))
+        print("  property_groups={}".format(file_meta_data.property_groups))
+        print("  has_explicit_shared_members={}".format(file_meta_data.has_explicit_shared_members))
+        print("  content_hash={}".format(file_meta_data.content_hash))
 
-    file_mtimestamp = os.path.getmtime(src_file_path)
-    # be sure and get time zone aware time in UTC time so that it saves with correct time
-    # it is being saved who-knows-where in the world.
-    file_client_modified = datetime.datetime.fromtimestamp(file_mtimestamp, datetime.timezone.utc)
-    # Destinatoin TODO: Need to figure out mode and autorename parameter
-    commit_info = dropbox.files.CommitInfo(path=dest_file_path, client_modified=file_client_modified)
-    session_cursor = dropbox.files.UploadSessionCursor()
-    with open(src_file_path, mode='rb') as file_to_upload:
-        while True:
-            file_meta_data = upload_next_chunk(dbx,
-                                               file_to_upload,
-                                               commit_info,
-                                               session_cursor)
-            if file_meta_data is not None:
-                break
-    del(session_cursor)
-    return file_meta_data
+
+def main(dbx, src_base_path, dest_base_path, target_relative_path):
+    src_path_string = os.path.join(src_base_path, target_relative_path)
+    dest_path_string = os.path.join(dest_base_path, target_relative_path)
+    src_path = Path(src_path_string)
+    dest_path = Path(dest_path_string)
+    upload(dbx, src_path, dest_path)
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 4:
+        SRC_BASE_PATH = sys.argv[1].strip()
+        DEST_BASE_PATH = sys.argv[2].strip()
+        FILE_RELATIVE_PATH = sys.argv[3].strip()
+    else:
+        SRC_BASE_PATH = '/home/michael/Pictures/'
+        DEST_BASE_PATH = '/SDK_TEST/Pictures/'
+        FILE_RELATIVE_PATH = '2017/03/28/20170328_195058.jpg'
+
     dbx = dropbox.Dropbox(intput("Enter access code:"))
-    TEST_FILE_SRC_BASE_PATH ='/home/michael/Pictures/'
-    TEST_FILE_DEST_BASE_PATH = '/SDK_TEST/Pictures/'
-    TEST_FILE_RELATIVE_PATH = '2017/03/28/20170328_195058.jpg'
-    file_meta_data = upload_file(dbx, src_base_path=TEST_FILE_SRC_BASE_PATH,
-                dest_base_path=TEST_FILE_DEST_BASE_PATH,
-                file_relative_path=TEST_FILE_RELATIVE_PATH)
-    print("Uploaded file meta data:\n")
-    print("  id={}".format(file_meta_data.id))
-    print("  client_modified={}".format(file_meta_data.client_modified))
-    print("  server_modified={}".format(file_meta_data.server_modified))
-    print("  rev={}".format(file_meta_data.rev))
-    print("  size={}".format(file_meta_data.size))
-    print("  media_info={}".format(file_meta_data.media_info))
-    print("  sharing_info={}".format(file_meta_data.sharing_info))
-    print("  property_groups={}".format(file_meta_data.property_groups))
-    print("  has_explicit_shared_members={}".format(file_meta_data.has_explicit_shared_members))
-    print("  content_hash={}".format(file_meta_data.content_hash))
 
-    # Uploaded file meta data:
-    #   id=id:Wp7cobjGjOQAAAAAAAAUXw
-    #   client_modified=2017-03-29 06:50:58
-    #   server_modified=2017-04-12 05:45:53
-    #   rev=36d30f98ee4e
-    #   size=1451797
-    #   media_info=None
-    #   sharing_info=None
-    #   property_groups=None
-    #   has_explicit_shared_members=None
-    #   content_hash=d21cdd9ba54ea656779c09db71cbf80938868771f8ad5acae9c55bb3cfcd4e18
-
+    main(dbx, src_base_path=SRC_BASE_PATH,
+                dest_base_path=DEST_BASE_PATH,
+                target_relative_path=FILE_RELATIVE_PATH)
     del(dbx)
+
+# def listdir(src_path, dest_path):
+#     if not src_path.exists():
+#         # TODO: throw exception? log? return an indicator?
+#         print("'{}' does not exist!".format(str(src_path)))
+#     if src_path.is_dir():
+#         for item in src_path.iterdir():
+#             listdir(item, dest_path.joinpath(item.name))
+#     elif src_path.is_file():
+#         print(str(src_path))
+#         print(str(dest_path))

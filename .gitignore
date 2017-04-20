@@ -1,2 +1,4 @@
 /.vscode/tags
 /.vscode/launch.json
+/.vscode/.ropeproject/objectdb
+/__pycache__/
