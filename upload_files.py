@@ -5,6 +5,7 @@
 
 import sys
 import os
+import time
 import datetime
 from pathlib import Path
 
@@ -16,7 +17,7 @@ import dropbox
 
 KILOBYTE = 1024
 MEGABYTE = KILOBYTE * KILOBYTE
-CHUNK_SIZE = 150 * MEGABYTE
+CHUNK_SIZE = 20 * MEGABYTE  # Dropbox documented max is 150 MB
 
 
 def upload_next_chunk(dbx, file_to_upload, commit_info, session_cursor):
@@ -67,14 +68,15 @@ def upload_next_chunk(dbx, file_to_upload, commit_info, session_cursor):
     return file_meta_data
 
 
-def upload(dbx, src_path, dest_path):
+def upload(dbx, src_path, dest_path, log_file_stream):
     if not src_path.exists():
         # TODO: throw exception? log? return an indicator?
         print("'{}' does not exist!".format(str(src_path)))
-    if src_path.is_dir():
-        for item in src_path.iterdir():
-            upload(dbx, item, dest_path.joinpath(item.name))
-    elif src_path.is_file():
+    if src_path.is_file():
+        # TODO: Is there a better way to skip disallowed names?
+        #       On Thumes.db get dropbox.exceptions.ApiError: ApiError('2a0f7718b501fc86e0ce9ef462733970', UploadError('path', UploadWriteFailed(reason=WriteError('disallowed_name', None),
+        if src_path.name.upper() == "THUMBS.DB":
+            return
         src_path_string = str(src_path)
         dest_path_string = str(dest_path)
         file_mtimestamp = os.path.getmtime(src_path_string)
@@ -84,6 +86,7 @@ def upload(dbx, src_path, dest_path):
         # Destinatoin TODO: Need to figure out mode and autorename parameter
         commit_info = dropbox.files.CommitInfo(path=dest_path_string, client_modified=file_client_modified)
         session_cursor = dropbox.files.UploadSessionCursor()
+        print("Copying file: '{}'\n".format(src_path_string))
         with open(src_path_string, mode='rb') as file_to_upload:
             while True:
                 file_meta_data = upload_next_chunk(dbx,
@@ -92,43 +95,73 @@ def upload(dbx, src_path, dest_path):
                                                 session_cursor)
                 if file_meta_data is not None:
                     break
+                time.sleep(.1)
         del(session_cursor)
-        print("Uploaded file meta data:\n")
-        print("  id={}".format(file_meta_data.id))
-        print("  client_modified={}".format(file_meta_data.client_modified))
-        print("  server_modified={}".format(file_meta_data.server_modified))
-        print("  rev={}".format(file_meta_data.rev))
-        print("  size={}".format(file_meta_data.size))
-        print("  media_info={}".format(file_meta_data.media_info))
-        print("  sharing_info={}".format(file_meta_data.sharing_info))
-        print("  property_groups={}".format(file_meta_data.property_groups))
-        print("  has_explicit_shared_members={}".format(file_meta_data.has_explicit_shared_members))
-        print("  content_hash={}".format(file_meta_data.content_hash))
+        print("Copied file: '{}'\n".format(src_path_string))
+        log_file_stream.write(src_path_string)
+        log_file_stream.write(",")
+        log_file_stream.write(str(file_client_modified))
+        log_file_stream.write(",")
+        log_file_stream.write(dest_path_string)
+        # print("Uploaded file meta data:\n")
+        log_file_stream.write(",")
+        log_file_stream.write(file_meta_data.id)
+        log_file_stream.write(",")
+        log_file_stream.write(str(file_meta_data.client_modified))
+        log_file_stream.write(",")
+        log_file_stream.write(str(file_meta_data.server_modified))
+        log_file_stream.write(",")
+        log_file_stream.write(file_meta_data.rev)
+        log_file_stream.write(",")
+        log_file_stream.write(str(file_meta_data.size))
+        log_file_stream.write(",")
+        log_file_stream.write(file_meta_data.content_hash)
+        log_file_stream.write("\n")
+        # print("  media_info={}".format(file_meta_data.media_info))
+        # print("  sharing_info={}".format(file_meta_data.sharing_info))
+        # print("  property_groups={}".format(file_meta_data.property_groups))
+        # print("  has_explicit_shared_members={}".format(file_meta_data.has_explicit_shared_members))
+        # print("  content_hash={}".format(file_meta_data.content_hash))
+    elif not src_path.is_dir():
+        pass
+    else:
+        for item in src_path.iterdir():
+            upload(dbx, item, dest_path.joinpath(item.name), log_file_stream)
 
 
-def main(dbx, src_base_path, dest_base_path, target_relative_path):
+def main(dbx, src_base_path, dest_base_path, target_relative_path, log_file_path):
     src_path_string = os.path.join(src_base_path, target_relative_path)
     dest_path_string = os.path.join(dest_base_path, target_relative_path)
     src_path = Path(src_path_string)
     dest_path = Path(dest_path_string)
-    upload(dbx, src_path, dest_path)
+    log_file_stream = open(log_file_path, 'wt')
+    try:
+        upload(dbx, src_path, dest_path, log_file_stream)
+    finally:
+        log_file_stream.close()
+        del(log_file_stream)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 4:
+    if len(sys.argv) == 5:
         SRC_BASE_PATH = sys.argv[1].strip()
         DEST_BASE_PATH = sys.argv[2].strip()
         FILE_RELATIVE_PATH = sys.argv[3].strip()
+        LOG_FILE_PATH = sys.argv[4].strip()
     else:
-        SRC_BASE_PATH = '/home/michael/Pictures/'
-        DEST_BASE_PATH = '/SDK_TEST/Pictures/'
-        FILE_RELATIVE_PATH = '2017/03/28/20170328_195058.jpg'
+        SRC_BASE_PATH = '/home/michael/Documents/'
+        DEST_BASE_PATH = '/SDK_TEST/'
+        FILE_RELATIVE_PATH = 'My Vocation'
+        LOG_FILE_PATH = "/home/michael/Documents/My Vocation.dbxup.log"
 
-    dbx = dropbox.Dropbox(intput("Enter access code:"))
+    access_code = input("Enter access code:")
+    print("\n{}\n".format(access_code))
+    dbx = dropbox.Dropbox(access_code, timeout=60)
 
     main(dbx, src_base_path=SRC_BASE_PATH,
                 dest_base_path=DEST_BASE_PATH,
-                target_relative_path=FILE_RELATIVE_PATH)
+                target_relative_path=FILE_RELATIVE_PATH,
+                log_file_path=LOG_FILE_PATH)
     del(dbx)
 
 # def listdir(src_path, dest_path):
